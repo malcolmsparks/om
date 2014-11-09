@@ -1,9 +1,7 @@
 (ns om.core
-  (:require-macros [om.core :refer [check allow-reads]])
   (:require [om.dom :as dom :include-macros true])
   (:import [goog.ui IdGenerator]))
 
-(def ^{:tag boolean :dynamic true :private true} *read-enabled* false)
 (def ^{:dynamic true :private true} *parent* nil)
 (def ^{:dynamic true :private true} *instrument* nil)
 (def ^{:dynamic true :private true} *descriptor* nil)
@@ -87,20 +85,21 @@
 
 (defprotocol ICursor
   (-path [cursor])
-  (-state [cursor]))
+  (-state [cursor])
+  (-renderT [cursor]))
 
 (defprotocol IToCursor
-  (-to-cursor [value state] [value state path]))
+  (-to-cursor [value state] [value state path] [value state path renderT]))
 
 (defprotocol ICursorDerive
-  (-derive [cursor derived state path]))
+  (-derive [cursor derived state path renderT]))
 
 (declare to-cursor)
 
 (extend-type default
   ICursorDerive
-  (-derive [this derived state path]
-    (to-cursor derived state path)))
+  (-derive [this derived state path renderT]
+    (to-cursor derived state path renderT)))
 
 (defn path [cursor]
   (-path cursor))
@@ -174,7 +173,7 @@
 (defn ^:private children [node]
   (let [c (.. node -props -children)]
     (if (fn? c)
-      (set! (.. node -props -children) (allow-reads (c node)))
+      (set! (.. node -props -children) (c node))
       c)))
 
 (defn get-props
@@ -263,7 +262,7 @@
      (this-as this
        (let [c (children this)]
          (when (satisfies? IDisplayName c)
-           (allow-reads (display-name c))))))
+           (display-name c)))))
    :getInitialState
    (fn []
      (this-as this
@@ -275,51 +274,50 @@
                          :__om_state
                          (merge
                            (when (satisfies? IInitState c)
-                             (allow-reads (init-state c)))
+                             (init-state c))
                            (dissoc istate ::id))}]
          (aset props "__om_init_state" nil)
          ret)))
    :shouldComponentUpdate
    (fn [next-props next-state]
      (this-as this
-       (allow-reads
-         (let [props (.-props this)
-               state (.-state this)
-               c     (children this)]
-           ;; need to merge in props state first
-           (merge-props-state this next-props)
-           (if (satisfies? IShouldUpdate c)
-             (should-update c
-               (get-props #js {:props next-props})
-               (-get-state this))
-             (let [cursor      (aget props "__om_cursor")
-                   next-cursor (aget next-props "__om_cursor")]
-              (cond
-                (not= (-value cursor) (-value next-cursor))
-                true
+       (let [props (.-props this)
+             state (.-state this)
+             c     (children this)]
+         ;; need to merge in props state first
+         (merge-props-state this next-props)
+         (if (satisfies? IShouldUpdate c)
+           (should-update c
+             (get-props #js {:props next-props})
+             (-get-state this))
+           (let [cursor      (aget props "__om_cursor")
+                 next-cursor (aget next-props "__om_cursor")]
+             (cond
+               (not= (-value cursor) (-value next-cursor))
+               true
 
-                (and (cursor? cursor) (cursor? next-cursor)
-                     (not= (-path cursor) (-path next-cursor )))
-                true
+               (and (cursor? cursor) (cursor? next-cursor)
+                    (not= (-path cursor) (-path next-cursor )))
+               true
                
-                (not= (-get-state this) (-get-render-state this))
-                true
+               (not= (-get-state this) (-get-render-state this))
+               true
 
-                (and (not (zero? (count (aget state "__om_refs"))))
-                     (some #(ref-changed? %) (aget state "__om_refs")))
-                true
+               (and (not (zero? (count (aget state "__om_refs"))))
+                    (some #(ref-changed? %) (aget state "__om_refs")))
+               true
 
-                (not (== (aget props "__om_index") (aget next-props "__om_index")))
-                true
+               (not (== (aget props "__om_index") (aget next-props "__om_index")))
+               true
 
-                :else false)))))))
+               :else false))))))
    :componentWillMount
    (fn []
      (this-as this
        (merge-props-state this)
        (let [c (children this)]
          (when (satisfies? IWillMount c)
-           (allow-reads (will-mount c))))
+           (will-mount c)))
        (merge-pending-state this)))
    :componentDidMount
    (fn []
@@ -327,14 +325,14 @@
        (let [c (children this)
              cursor (aget (.-props this) "__om_cursor")]
          (when (satisfies? IDidMount c)
-           (allow-reads (did-mount c))))))
+           (did-mount c)))))
    :componentWillUnmount
    (fn []
      (this-as this
        (let [c (children this)
              cursor (aget (.-props this) "__om_cursor")]
          (when (satisfies? IWillUnmount c)
-           (allow-reads (will-unmount c)))
+           (will-unmount c))
          (when-let [refs (seq (aget (.-state this) "__om_refs"))]
            (doseq [ref refs]
              (unobserve this ref))))))
@@ -344,10 +342,9 @@
        (let [c (children this)]
          (when (satisfies? IWillUpdate c)
            (let [state (.-state this)]
-             (allow-reads
-               (will-update c
-                 (get-props #js {:props next-props})
-                 (-get-state this))))))
+             (will-update c
+               (get-props #js {:props next-props})
+               (-get-state this)))))
        (merge-pending-state this)
        (update-refs this)))
    :componentDidUpdate
@@ -356,20 +353,18 @@
        (let [c (children this)]
          (when (satisfies? IDidUpdate c)
            (let [state (.-state this)]
-             (allow-reads
-               (did-update c
-                 (get-props #js {:props prev-props})
-                 (or (aget state "__om_prev_state")
-                     (aget state "__om_state"))))))
+             (did-update c
+               (get-props #js {:props prev-props})
+               (or (aget state "__om_prev_state")
+                   (aget state "__om_state")))))
          (aset (.-state this) "__om_prev_state" nil))))
    :componentWillReceiveProps
    (fn [next-props]
      (this-as this
        (let [c (children this)]
          (when (satisfies? IWillReceiveProps c)
-           (allow-reads
-             (will-receive-props c
-               (get-props #js {:props next-props})))))))
+           (will-receive-props c
+             (get-props #js {:props next-props}))))))
    :render
    (fn []
      (this-as this
@@ -380,38 +375,35 @@
                    *instrument* (aget props "__om_instrument")
                    *descriptor* (aget props "__om_descriptor")
                    *root-key*   (aget props "__om_root_key")]
-           (allow-reads
-             (cond
-               (satisfies? IRender c)
-               (render c)
+           (cond
+             (satisfies? IRender c)
+             (render c)
 
-               (satisfies? IRenderProps c)
-               (render-props c (aget props "__om_cursor") (get-state this))
+             (satisfies? IRenderProps c)
+             (render-props c (aget props "__om_cursor") (get-state this))
 
-               (satisfies? IRenderState c)
-               (render-state c (get-state this))
-               :else c))))))})
+             (satisfies? IRenderState c)
+             (render-state c (get-state this))
+             :else c)))))})
 
 (defn specify-state-methods! [obj]
   (specify! obj
     ISetState
     (-set-state!
       ([this val render]
-         (allow-reads
-           (let [props     (.-props this)
-                 app-state (aget props "__om_app_state")]
-             (aset (.-state this) "__om_pending_state" val)
-             (when (and (not (nil? app-state)) render)
-               (-queue-render! app-state this)))))
+         (let [props     (.-props this)
+               app-state (aget props "__om_app_state")]
+           (aset (.-state this) "__om_pending_state" val)
+           (when (and (not (nil? app-state)) render)
+             (-queue-render! app-state this))))
       ([this ks val render]
-         (allow-reads
-           (let [props     (.-props this)
-                 state     (.-state this)
-                 pstate    (-get-state this)
-                 app-state (aget props "__om_app_state")]
-             (aset state "__om_pending_state" (assoc-in pstate ks val))
-             (when (and (not (nil? app-state)) render)
-               (-queue-render! app-state this))))))
+         (let [props     (.-props this)
+               state     (.-state this)
+               pstate    (-get-state this)
+               app-state (aget props "__om_app_state")]
+           (aset state "__om_pending_state" (assoc-in pstate ks val))
+           (when (and (not (nil? app-state)) render)
+             (-queue-render! app-state this)))))
     IGetRenderState
     (-get-render-state
       ([this]
@@ -466,7 +458,7 @@
                          (.getNextUniqueId (.getInstance IdGenerator)))
               state  (merge (dissoc istate ::id)
                        (when (satisfies? IInitState c)
-                         (allow-reads (init-state c))))
+                         (init-state c)))
               spath  [:state-map (react-id this) :render-state]]
           (aset props "__om_init_state" nil)
           (swap! (get-gstate this) assoc-in spath state)
@@ -477,7 +469,7 @@
         (merge-props-state this)
         (let [c (children this)]
           (when (satisfies? IWillMount c)
-            (allow-reads (will-mount c))))
+            (will-mount c)))
         (no-local-merge-pending-state this)))
     :componentWillUnmount
     (fn []
@@ -485,7 +477,7 @@
         (let [c     (children this)
               spath [:state-map (react-id this)]]
           (when (satisfies? IWillUnmount c)
-            (allow-reads (will-unmount c)))
+            (will-unmount c))
           (swap! (get-gstate this) update-in spath dissoc)
           (when-let [refs (seq (aget (.-state this) "__om_refs"))]
             (doseq [ref refs]
@@ -497,10 +489,9 @@
              c      (children this)]
          (when (satisfies? IWillUpdate c)
            (let [state (.-state this)]
-             (allow-reads
-               (will-update c
-                 (get-props #js {:props next-props})
-                 (-get-state this))))))
+             (will-update c
+               (get-props #js {:props next-props})
+               (-get-state this)))))
        (no-local-merge-pending-state this)
        (update-refs this)))
     :componentDidUpdate
@@ -512,11 +503,10 @@
               spath  [:state-map (react-id this)]]
           (when (satisfies? IDidUpdate c)
             (let [state (.-state this)]
-              (allow-reads
-                (did-update c
-                  (get-props #js {:props prev-props})
-                  (or (:previous-state states)
-                      (:render-state states))))))
+              (did-update c
+                (get-props #js {:props prev-props})
+                (or (:previous-state states)
+                    (:render-state states)))))
           (when (:previous-state states)
             (swap! gstate update-in spath dissoc :previous-state)))))))
 
@@ -525,21 +515,19 @@
     ISetState
     (-set-state!
       ([this val render]
-         (allow-reads
-           (let [props     (.-props this)
-                 app-state (aget props "__om_app_state")
-                 spath  [:state-map (react-id this) :pending-state]]
-             (swap! (get-gstate this) assoc-in spath val)
-             (when (and (not (nil? app-state)) render)
-               (-queue-render! app-state this)))))
+         (let [props     (.-props this)
+               app-state (aget props "__om_app_state")
+               spath  [:state-map (react-id this) :pending-state]]
+           (swap! (get-gstate this) assoc-in spath val)
+           (when (and (not (nil? app-state)) render)
+             (-queue-render! app-state this))))
       ([this ks val render]
-         (allow-reads
-           (let [props     (.-props this)
-                 app-state (aget props "__om_app_state")
-                 spath  [:state-map (react-id this) :pending-state]]
-             (swap! (get-gstate this) update-in spath assoc-in ks val)
-             (when (and (not (nil? app-state)) render)
-               (-queue-render! app-state this))))))
+         (let [props     (.-props this)
+               app-state (aget props "__om_app_state")
+               spath  [:state-map (react-id this) :pending-state]]
+           (swap! (get-gstate this) update-in spath assoc-in ks val)
+           (when (and (not (nil? app-state)) render)
+             (-queue-render! app-state this)))))
     IGetRenderState
     (-get-render-state
       ([this]
@@ -560,49 +548,66 @@
 ;; =============================================================================
 ;; Cursors
 
-(deftype MapCursor [value state path]
+(declare get-renderT)
+
+(defn valid? [x]
+  (if (satisfies? ICursor x)
+    (not (keyword-identical? (-value x) ::invalid))
+    true))
+
+(defn ensure [x]
+  (assert (valid? x) (str "Invalid cursor, path " (-path x) " no longer exists"))
+  (when (satisfies? ICursor x)
+    (let [s  (-state x)
+          t  (-renderT x)
+          t' (get-renderT s)]
+      (when-not (== t t')
+        (set! (.-value x) (get-in @s (-path x) ::invalid))
+        (set! (.-renderT x) t')))))
+
+(deftype MapCursor [^:mutable value state path ^:mutable renderT]
   IWithMeta
-  (-with-meta [_ new-meta]
-    (check
-      (MapCursor. (with-meta value new-meta) state path)))
+  (-with-meta [this new-meta]
+    (ensure this)
+    (MapCursor. (with-meta value new-meta) state path renderT))
   IMeta
-  (-meta [_] (check (meta value)))
-  IDeref
-  (-deref [this]
-    (if-not *read-enabled*
-      (get-in @state path)
-      (throw (js/Error. (str "Cannot deref cursor during render phase: " this)))))
+  (-meta [this]
+    (ensure this)
+    (meta value))
   IValue
   (-value [_] value)
   ICursor
   (-path [_] path)
   (-state [_] state)
+  (-renderT [_] renderT)
   ITransact
   (-transact! [this korks f tag]
     (transact* state this korks f tag))
   ICloneable
   (-clone [_]
-    (MapCursor. value state path))
+    (MapCursor. value state path renderT))
   ICounted
-  (-count [_]
-    (check (-count value)))
+  (-count [this]
+    (ensure this)
+    (-count value))
   ICollection
-  (-conj [_ o]
-    (check (MapCursor. (-conj value o) state path)))
+  (-conj [this o]
+    (ensure this)
+    (MapCursor. (-conj value o) state path renderT))
   ;; EXPERIMENTAL
   IEmptyableCollection
-  (-empty [_]
-    (check
-      (MapCursor. (empty value) state path)))
+  (-empty [this]
+    (ensure this)
+    (MapCursor. (empty value) state path renderT))
   ILookup
   (-lookup [this k]
     (-lookup this k nil))
   (-lookup [this k not-found]
-    (check
-      (let [v (-lookup value k ::not-found)]
-        (if-not (= v ::not-found)
-          (-derive this v state (conj path k))
-          not-found))))
+    (ensure this)
+    (let [v (-lookup value k ::not-found)]
+      (if-not (= v ::not-found)
+        (-derive this v state (conj path k) renderT)
+        not-found)))
   IFn
   (-invoke [this k]
     (-lookup this k))
@@ -610,69 +615,77 @@
     (-lookup this k not-found))
   ISeqable
   (-seq [this]
-    (check
-      (when (pos? (count value))
-        (map (fn [[k v]] [k (-derive this v state (conj path k))]) value))))
+    (ensure this)
+    (when (pos? (count value))
+      (map (fn [[k v]] [k (-derive this v state (conj path k) renderT)]) value)))
   IAssociative
-  (-contains-key? [_ k]
-    (check (-contains-key? value k)))
-  (-assoc [_ k v]
-    (check (MapCursor. (-assoc value k v) state path)))
+  (-contains-key? [this k]
+    (ensure this)
+    (-contains-key? value k))
+  (-assoc [this k v]
+    (ensure this)
+    (MapCursor. (-assoc value k v) state path renderT))
   IMap
-  (-dissoc [_ k]
-    (check (MapCursor. (-dissoc value k) state path)))
+  (-dissoc [this k]
+    (ensure this)
+    (MapCursor. (-dissoc value k) state path renderT))
   IEquiv
-  (-equiv [_ other]
-    (check
-      (if (cursor? other)
-        (= value (-value other))
-        (= value other))))
+  (-equiv [this other]
+    (ensure this)
+    (if (cursor? other)
+      (= value (-value other))
+      (= value other)))
   IHash
-  (-hash [_]
-    (check (hash value)))
+  (-hash [this]
+    (ensure this)
+    (hash value))
   IPrintWithWriter
-  (-pr-writer [_ writer opts]
-    (check (-pr-writer value writer opts))))
+  (-pr-writer [this writer opts]
+    (ensure this)
+    (-pr-writer value writer opts)))
 
-(deftype IndexedCursor [value state path]
+(deftype IndexedCursor [^:mutable value state path ^:mutable renderT]
   ISequential
-  IDeref
-  (-deref [this]
-    (if-not *read-enabled*
-      (get-in @state path)
-      (throw (js/Error. (str "Cannot deref cursor during render phase: " this)))))
   IWithMeta
-  (-with-meta [_ new-meta]
-    (check
-      (IndexedCursor. (with-meta value new-meta) state path)))
+  (-with-meta [this new-meta]
+    (ensure this)
+    (IndexedCursor. (with-meta value new-meta) state path renderT))
   IMeta
-  (-meta [_] (check (meta value)))
+  (-meta [this]
+    (ensure this)
+    (meta value))
   IValue
   (-value [_] value)
   ICursor
   (-path [_] path)
   (-state [_] state)
+  (-renderT [_] renderT)
   ITransact
   (-transact! [this korks f tag]
     (transact* state this korks f tag))
   ICloneable
   (-clone [_]
-    (IndexedCursor. value state path))
+    (IndexedCursor. value state path renderT))
   ICounted
-  (-count [_]
-    (check (-count value)))
+  (-count [this]
+    (ensure this)
+    (-count value))
   ICollection
-  (-conj [_ o]
-    (check (IndexedCursor. (-conj value o) state path)))
+  (-conj [this o]
+    (ensure this)
+    (IndexedCursor. (-conj value o) state path renderT))
   ;; EXPERIMENTAL
   IEmptyableCollection
-  (-empty [_]
-    (check (IndexedCursor. (empty value) state path)))
+  (-empty [this]
+    (ensure this)
+    (IndexedCursor. (empty value) state path renderT))
   ILookup
   (-lookup [this n]
-    (check (-nth this n nil)))
+    (ensure this)
+    (-nth this n nil))
   (-lookup [this n not-found]
-    (check (-nth this n not-found)))
+    (ensure this)
+    (-nth this n not-found))
   IFn
   (-invoke [this k]
     (-lookup this k))
@@ -680,70 +693,77 @@
     (-lookup this k not-found))
   IIndexed
   (-nth [this n]
-    (check (-derive this (-nth value n) state (conj path n))))
+    (ensure this)
+    (-derive this (-nth value n) state (conj path n) renderT))
   (-nth [this n not-found]
-    (check
-      (if (< n (-count value))
-        (-derive this (-nth value n not-found) state (conj path n))
-        not-found)))
+    (ensure this)
+    (if (< n (-count value))
+      (-derive this (-nth value n not-found) state (conj path n) renderT)
+      not-found))
   ISeqable
   (-seq [this]
-    (check
-      (when (pos? (count value))
-        (map (fn [v i] (-derive this v state (conj path i))) value (range)))))
+    (ensure this)
+    (when (pos? (count value))
+      (map (fn [v i] (-derive this v state (conj path i) renderT)) value (range))))
   IAssociative
-  (-contains-key? [_ k]
-    (check (-contains-key? value k)))
+  (-contains-key? [this k]
+    (ensure this)
+    (-contains-key? value k))
   (-assoc [this n v]
-    (check (-derive this (-assoc-n value n v) state path)))
+    (ensure this)
+    (-derive this (-assoc-n value n v) state path renderT))
   IStack
   (-peek [this]
-    (check (-derive this (-peek value) state path)))
+    (ensure this)
+    (-derive this (-peek value) state path renderT))
   (-pop [this]
-    (check (-derive this (-pop value) state path)))
+    (ensure this)
+    (-derive this (-pop value) state path renderT))
   IEquiv
-  (-equiv [_ other]
-    (check
-      (if (cursor? other)
-        (= value (-value other))
-        (= value other))))
+  (-equiv [this other]
+    (ensure this)
+    (if (cursor? other)
+      (= value (-value other))
+      (= value other)))
   IHash
-  (-hash [_]
-    (check (hash value)))
+  (-hash [this]
+    (ensure this)
+    (hash value))
   IPrintWithWriter
-  (-pr-writer [_ writer opts]
-    (check (-pr-writer value writer opts))))
+  (-pr-writer [this writer opts]
+    (ensure this)
+    (-pr-writer value writer opts)))
 
-(defn ^:private to-cursor* [val state path]
-  (specify val
-    IDeref
-    (-deref [this]
-      (if-not *read-enabled*
-        (get-in @state path)
-        (throw (js/Error. (str "Cannot deref cursor during render phase: " this)))))
-    ICursor
-    (-path [_] path)
-    (-state [_] state)
-    ITransact
-    (-transact! [this korks f tag]
-      (transact* state this korks f tag))
-    IEquiv
-    (-equiv [_ other]
-      (check
-        (if (cursor? other)
-          (= val (-value other))
-          (= val other))))))
+;; NOTE: ICloneable cursors cannot be ensured - David
+
+(defn ^:private to-cursor*
+  ([val state path] (to-cursor* val state path (get-renderT state)))
+  ([val state path renderT]
+     (specify val
+       ICursor
+       (-path [_] path)
+       (-state [_] state)
+       (-renderT [_] renderT)
+       ITransact
+       (-transact! [this korks f tag]
+         (transact* state this korks f tag))
+       IEquiv
+       (-equiv [this other]
+         (if (cursor? other)
+           (= val (-value other))
+           (= val other))))))
 
 (defn ^:private to-cursor
   ([val] (to-cursor val nil []))
   ([val state] (to-cursor val state []))
-  ([val state path]
+  ([val state path] (to-cursor val state path (get-renderT state)))
+  ([val state path renderT]
     (cond
       (cursor? val) val
-      (satisfies? IToCursor val) (-to-cursor val state path)
-      (indexed? val) (IndexedCursor. val state path)
-      (map? val) (MapCursor. val state path)
-      (satisfies? ICloneable val) (to-cursor* val state path)
+      (satisfies? IToCursor val) (-to-cursor val state path renderT)
+      (indexed? val) (IndexedCursor. val state path renderT)
+      (map? val) (MapCursor. val state path renderT)
+      (satisfies? ICloneable val) (to-cursor* val state path renderT)
       :else val)))
 
 (defn notify* [cursor tx-data]
@@ -771,8 +791,8 @@
     (-adapt [this other]
       (ref-sub-cursor (adapt x other) parent))
     ICursorDerive
-    (-derive [this derived state path]
-      (let [cursor' (to-cursor derived state path)]
+    (-derive [this derived state path renderT]
+      (let [cursor' (to-cursor derived state path renderT)]
         (if (cursor? cursor')
           (adapt this cursor')
           cursor')))
@@ -795,8 +815,8 @@
                     path)]
       (specify cursor
         ICursorDerive
-        (-derive [this derived state path]
-          (let [cursor' (to-cursor derived state path)]
+        (-derive [this derived state path renderT]
+          (let [cursor' (to-cursor derived state path renderT)]
             (if (cursor? cursor')
               (ref-sub-cursor cursor' this)
               cursor')))
@@ -901,10 +921,9 @@
                     :__om_instrument *instrument*
                     :children
             (fn [this]
-              (allow-reads
-                (let [ret (f cursor this)]
-                  (valid-component? ret f)
-                  ret)))}))
+              (let [ret (f cursor this)]
+                (valid-component? ret f)
+                ret))}))
 
        :else
        (let [{:keys [key state init-state opts]} m
@@ -932,15 +951,13 @@
                     :children
             (if (nil? opts)
               (fn [this]
-                (allow-reads
-                  (let [ret (f cursor' this)]
-                    (valid-component? ret f)
-                    ret)))
+                (let [ret (f cursor' this)]
+                  (valid-component? ret f)
+                  ret))
               (fn [this]
-                (allow-reads
-                  (let [ret (f cursor' this opts)]
-                    (valid-component? ret f)
-                    ret))))})))))
+                (let [ret (f cursor' this opts)]
+                  (valid-component? ret f)
+                  ret)))})))))
 
 (defn build
   "Builds an Om component. Takes an IRender/IRenderState instance
@@ -979,7 +996,7 @@
   ([f x] (build f x nil))
   ([f x m]
      (if-not (nil? *instrument*)
-       (let [ret (allow-reads (*instrument* f x m))]
+       (let [ret (*instrument* f x m)]
          (if (= ret ::pass)
            (build* f x m)
            ret))
@@ -1280,9 +1297,4 @@
   ([owner korks]
      (let [ks (if (sequential? korks) korks [korks])]
        (-get-render-state owner ks))))
-
-(defn rendering?
-  "Returns true if in the React render phase."
-  []
-  (true? *read-enabled*))
 
